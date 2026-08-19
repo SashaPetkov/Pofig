@@ -131,6 +131,11 @@
       min-height: 20px;
     }
   </style>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+  <!-- PeerJS -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -139,7 +144,7 @@
   <div id="status">Инициализация камеры...</div>
 
   <div class="card" id="room-controls">
-    <label for="room-input" style="font-size: 14px; color: #aaa;">Введите имя или номер комнаты:</label>
+    <label for="room-input" style="font-size: 14px; color: #aaa;">Введите имя комнаты:</label>
     <div class="input-row">
       <input type="text" id="room-input" placeholder="например, room-1">
       <button id="join-btn">Войти</button>
@@ -147,9 +152,9 @@
     </div>
 
     <div class="room-tags-wrapper">
-      <div style="font-size: 13px; color: #aaa;">Свободные комнаты (ждут собеседника 1/2):</div>
+      <div style="font-size: 13px; color: #aaa;">Комнаты, где ждут собеседника (1/2):</div>
       <div id="rooms-list" class="room-tags">
-        <span style="color: #666; font-size: 13px;">Загрузка списка...</span>
+        <span style="color: #666; font-size: 13px;">Поиск комнат...</span>
       </div>
     </div>
   </div>
