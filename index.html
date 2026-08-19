@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Видеочат по комнатам</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+      background: #121212;
+      color: #eaeaea;
+      margin: 0;
+    }
+    h1 {
+      margin-bottom: 8px;
+      font-size: 24px;
+    }
+    .card {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      padding: 16px 20px;
+      border-radius: 12px;
+      width: 100%;
+      max-width: 480px;
+      margin-bottom: 20px;
+      box-sizing: border-box;
+    }
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    input {
+      flex: 1;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid #444;
+      background: #2a2a2a;
+      color: #fff;
+      font-size: 15px;
+    }
+    input:disabled {
+      background: #1c1c1c;
+      color: #777;
+      border-color: #333;
+    }
+    button {
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 500;
+      cursor: pointer;
+      font-size: 15px;
+      transition: background 0.2s;
+    }
+    #join-btn {
+      background: #2563eb;
+      color: #fff;
+    }
+    #join-btn:hover {
+      background: #1d4ed8;
+    }
+    #leave-btn {
+      background: #dc2626;
+      color: #fff;
+      display: none;
+    }
+    #leave-btn:hover {
+      background: #b91c1c;
+    }
+    .room-tags-wrapper {
+      margin-top: 16px;
+      border-top: 1px solid #2e2e2e;
+      padding-top: 12px;
+    }
+    .room-tags {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .tag {
+      background: #2a2a2a;
+      border: 1px solid #444;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .tag:hover {
+      background: #383838;
+      border-color: #60a5fa;
+    }
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      width: 100%;
+      max-width: 800px;
+    }
+    .video-card {
+      background: #1e1e1e;
+      border-radius: 12px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .video-card span {
+      margin-bottom: 8px;
+      font-size: 14px;
+      color: #888;
+    }
+    video {
+      width: 100%;
+      height: 240px;
+      background: #000;
+      border-radius: 8px;
+      object-fit: cover;
+    }
+    #status {
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: #60a5fa;
+      text-align: center;
+      min-height: 20px;
+    }
+  </style>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+  <h1>Petkov видеочат</h1>
+  <div id="status">Инициализация камеры...</div>
+
+  <div class="card" id="room-controls">
+    <label for="room-input" style="font-size: 14px; color: #aaa;">Введите имя или номер комнаты:</label>
+    <div class="input-row">
+      <input type="text" id="room-input" placeholder="например, room-1">
+      <button id="join-btn">Войти</button>
+      <button id="leave-btn">Выйти</button>
+    </div>
+
+    <div class="room-tags-wrapper">
+      <div style="font-size: 13px; color: #aaa;">Свободные комнаты (ждут собеседника 1/2):</div>
+      <div id="rooms-list" class="room-tags">
+        <span style="color: #666; font-size: 13px;">Загрузка списка...</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="video-grid">
+    <div class="video-card">
+      <span>Вы</span>
+      <video id="local-video" autoplay muted playsinline></video>
+    </div>
+    <div class="video-card">
+      <span>Собеседник</span>
+      <video id="remote-video" autoplay playsinline></video>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
