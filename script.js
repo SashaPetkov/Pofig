@@ -1,3 +1,11 @@
+// Конфигурация Firebase с вашей базой данных
+const firebaseConfig = {
+  databaseURL: "https://pofig-b630a-default-rtdb.firebaseio.com"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
 const statusElem = document.getElementById('status');
 const roomInput = document.getElementById('room-input');
 const joinBtn = document.getElementById('join-btn');
@@ -10,63 +18,46 @@ let localStream = null;
 let peer = null;
 let currentCall = null;
 let currentRoom = null;
+let roomRef = null;
 
-// Настройка подключения к локальному/развернутому Peer-серверу
-const peerConfig = {
-  host: window.location.hostname || 'localhost',
-  port: 9000,
-  path: '/peerjs/chat',
-  config: {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478' }
-    ]
+// STUN-серверы Google для обхода NAT
+const iceServers = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' }
+];
+
+// Отслеживание списка комнат в реальном времени
+db.ref('rooms').on('value', (snapshot) => {
+  const rooms = snapshot.val() || {};
+  roomsList.innerHTML = '';
+
+  const waitingRooms = Object.entries(rooms).filter(([name, data]) => data.count === 1);
+
+  if (waitingRooms.length === 0) {
+    roomsList.innerHTML = '<span style="color: #666; font-size: 13px;">Нет активных комнат с 1 участником</span>';
+    return;
   }
-};
 
-// Запрос доступных комнат с бэкенда (только с 1 участником)
-async function fetchRooms() {
-  try {
-    const res = await fetch('/api/rooms');
-    const rooms = await res.json();
-    
-    // Фильтруем: показываем только комнаты, ожидающие второго участника
-    const availableRooms = rooms.filter(r => r.count === 1);
-
-    roomsList.innerHTML = '';
-    if (availableRooms.length === 0) {
-      roomsList.innerHTML = '<span style="color: #666; font-size: 13px;">Нет активных комнат с 1 участником</span>';
-      return;
-    }
-
-    availableRooms.forEach(room => {
-      const tag = document.createElement('div');
-      tag.className = 'tag';
-      tag.innerHTML = `🟢 <strong>${room.name}</strong> (1/2)`;
-      tag.onclick = () => {
-        if (!currentRoom) {
-          roomInput.value = room.name;
-          joinRoom(room.name);
-        }
-      };
-      roomsList.appendChild(tag);
-    });
-  } catch (err) {
-    roomsList.innerHTML = '<span style="color: #ef4444; font-size: 13px;">Ошибка загрузки списка комнат</span>';
-  }
-}
-
-// Периодическое обновление списка
-setInterval(fetchRooms, 3000);
+  waitingRooms.forEach(([name, data]) => {
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.innerHTML = `🟢 <strong>${name}</strong> (1/2)`;
+    tag.onclick = () => {
+      if (!currentRoom) {
+        roomInput.value = name;
+        joinRoom(name);
+      }
+    };
+    roomsList.appendChild(tag);
+  });
+});
 
 // Инициализация камеры
 async function initCamera() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
-    statusElem.textContent = 'Камера готова. Введите название комнаты или выберите готовую.';
-    
-    fetchRooms();
+    statusElem.textContent = 'Камера готова. Выберите комнату или введите название.';
 
     const urlParams = new URLSearchParams(window.location.search);
     const roomParam = urlParams.get('room');
@@ -75,77 +66,73 @@ async function initCamera() {
       joinRoom(roomParam);
     }
   } catch (err) {
-    statusElem.textContent = 'Ошибка доступа к устройствам: ' + err.message;
+    statusElem.textContent = 'Ошибка камеры/микрофона: ' + err.message;
   }
 }
 
 // Вход в комнату
-function joinRoom(rawRoomName) {
+async function joinRoom(rawRoomName) {
   const room = rawRoomName.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '');
   if (!room) {
-    alert('Используйте латинские буквы, цифры, дефис или подчеркивание.');
+    alert('Используйте только латинские буквы и цифры');
     return;
   }
 
-  // Очищаем предыдущую сессию при повторном входе
   leaveRoom(false);
   currentRoom = room;
-
-  window.history.pushState({}, '', `?room=${room}`);
   setUIState(true);
+  window.history.pushState({}, '', `?room=${room}`);
+
   statusElem.textContent = `Подключение к «${room}»...`;
 
-  const hostId = `room-${room}-host`;
-  peer = new Peer(hostId, peerConfig);
+  peer = new Peer({ config: { iceServers } });
 
-  peer.on('open', () => {
-    statusElem.textContent = `Вы создали комнату «${room}» (1/2). Ожидание собеседника...`;
-    fetchRooms();
-  });
+  peer.on('open', async (myId) => {
+    roomRef = db.ref(`rooms/${room}`);
+    const snapshot = await roomRef.get();
+    const roomData = snapshot.val();
 
-  // Входящий звонок от гостя
-  peer.on('call', (call) => {
-    currentCall = call;
-    call.answer(localStream);
-    handleStream(call);
-    fetchRooms();
-  });
+    if (!roomData) {
+      // 1. Создаем новую комнату (Хост)
+      await roomRef.set({
+        hostId: myId,
+        count: 1
+      });
+      roomRef.onDisconnect().remove();
 
-  peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') {
-      // Хост уже есть -> пробуем войти как гость
-      connectAsGuest(room, hostId);
+      statusElem.textContent = `Вы создали комнату «${room}» (1/2). Ожидание собеседника...`;
+
+      peer.on('call', (call) => {
+        currentCall = call;
+        call.answer(localStream);
+        handleStream(call);
+        roomRef.update({ count: 2 });
+      });
+
+    } else if (roomData.count === 1) {
+      // 2. Подключаемся вторым (Гость)
+      statusElem.textContent = `Подключение к собеседнику в «${room}»...`;
+      
+      await roomRef.update({ count: 2 });
+      roomRef.onDisconnect().update({ count: 1 });
+
+      const call = peer.call(roomData.hostId, localStream);
+      currentCall = call;
+      handleStream(call);
+
     } else {
-      statusElem.textContent = 'Ошибка подключения: ' + err.message;
+      // 3. Комната занята (2/2)
+      statusElem.textContent = 'Комната уже заполнена (2/2).';
       leaveRoom(false);
     }
   });
 
-  peer.on('disconnected', () => {
-    statusElem.textContent = 'Отключено от сервера.';
-  });
-}
-
-// Подключение в роли гостя
-function connectAsGuest(room, hostId) {
-  const guestId = `room-${room}-${Math.random().toString(36).substring(2, 7)}`;
-  peer = new Peer(guestId, peerConfig);
-
-  peer.on('open', () => {
-    statusElem.textContent = `Подключение к владельцу комнаты «${room}»...`;
-    const call = peer.call(hostId, localStream);
-    currentCall = call;
-    handleStream(call);
-    fetchRooms();
-  });
-
-  peer.on('error', () => {
-    statusElem.textContent = 'Не удалось подключиться: комната уже заполнена (2/2).';
+  peer.on('error', (err) => {
+    statusElem.textContent = 'Ошибка соединения: ' + err.message;
     leaveRoom(false);
   });
 }
 
-// Обработка видеопотока собеседника
 function handleStream(call) {
   call.on('stream', (stream) => {
     remoteVideo.srcObject = stream;
@@ -154,21 +141,25 @@ function handleStream(call) {
 
   call.on('close', () => {
     remoteVideo.srcObject = null;
-    statusElem.textContent = 'Собеседник вышел. Ожидание подключения...';
-    fetchRooms();
+    statusElem.textContent = 'Собеседник отключился.';
+    if (roomRef) {
+      roomRef.update({ count: 1 });
+    }
   });
 }
 
-// Корректный выход из комнаты
 function leaveRoom(updateStatus = true) {
   if (currentCall) {
     currentCall.close();
     currentCall = null;
   }
-
   if (peer) {
     peer.destroy();
     peer = null;
+  }
+  if (roomRef) {
+    roomRef.remove();
+    roomRef = null;
   }
 
   remoteVideo.srcObject = null;
@@ -180,26 +171,16 @@ function leaveRoom(updateStatus = true) {
   if (updateStatus) {
     statusElem.textContent = 'Вы вышли из комнаты.';
   }
-
-  fetchRooms();
 }
 
-// Переключение состояния кнопок и инпута
 function setUIState(isInRoom) {
-  if (isInRoom) {
-    joinBtn.style.display = 'none';
-    leaveBtn.style.display = 'inline-block';
-    roomInput.disabled = true;
-  } else {
-    joinBtn.style.display = 'inline-block';
-    leaveBtn.style.display = 'none';
-    roomInput.disabled = false;
-  }
+  joinBtn.style.display = isInRoom ? 'none' : 'inline-block';
+  leaveBtn.style.display = isInRoom ? 'inline-block' : 'none';
+  roomInput.disabled = isInRoom;
 }
 
 joinBtn.addEventListener('click', () => joinRoom(roomInput.value));
 leaveBtn.addEventListener('click', () => leaveRoom(true));
-
 roomInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') joinRoom(roomInput.value);
 });
