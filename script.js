@@ -63,6 +63,7 @@ let currentCall = null;
 let allUsers = {};
 let pendingIncomingCall = null;
 let ringtoneInterval = null;
+let callingTargetId = null;
 
 // === 4. ЗВУК ЗВОНКА (Web Audio API) ===
 let audioCtx = null;
@@ -116,34 +117,67 @@ async function initMedia() {
   }
 }
 
-// === 6. РУЧНОЙ ЗАПРОС НА PUSH-УВЕДОМЛЕНИЯ ===
-async function requestNotificationPermission() {
-  if (!messaging || !('serviceWorker' in navigator)) {
-    alert('Ваш браузер не поддерживает Push-уведомления.');
-    return;
-  }
-
-  try {
-    const permission = await Notification.requestPermission();
-    
-    if (permission === 'granted') {
-      const registration = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
-      const currentToken = await messaging.getToken({
-        vapidKey: VAPID_KEY,
-        serviceWorkerRegistration: registration
-      });
-
-      if (currentToken && currentUser) {
-        await db.ref(`users/${currentUser.id}`).update({ fcmToken: currentToken });
-        enableNotifBtn.style.display = 'none';
-        alert('Уведомления успешно включены!');
-      }
-    } else {
-      alert('Разрешение на отправку уведомлений отклонено.');
+// === 6. НАСТРОЙКА PUSH-УВЕДОМЛЕНИЙ ===
+if (enableNotifBtn) {
+  enableNotifBtn.addEventListener('click', () => {
+    if (!messaging || !('serviceWorker' in navigator)) {
+      alert('Push-уведомления не поддерживаются вашим браузером.');
+      return;
     }
-  } catch (err) {
-    console.error('Ошибка при включении уведомлений:', err);
-    alert('Ошибка: ' + err.message);
+
+    Notification.requestPermission().then(async (permission) => {
+      if (permission === 'granted') {
+        try {
+          const registration = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
+          const currentToken = await messaging.getToken({
+            vapidKey: VAPID_KEY,
+            serviceWorkerRegistration: registration
+          });
+
+          if (currentToken && currentUser) {
+            await db.ref(`users/${currentUser.id}`).update({ fcmToken: currentToken });
+            enableNotifBtn.style.display = 'none';
+            alert('Уведомления успешно включены!');
+          }
+        } catch (err) {
+          console.error('Ошибка токена:', err);
+          alert('Ошибка настройки: ' + err.message);
+        }
+      } else {
+        alert('Разрешение отклонено.');
+      }
+    });
+  });
+}
+
+// Отправка системного Web-Push через FCM
+async function sendPushNotification(targetToken, callerName) {
+  if (!targetToken) return;
+  try {
+    // Вызов встроенного сервиса отправки
+    await fetch('https://fcm.googleapis.com/fcm/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Используем публичный Web API ключ Firebase
+        'Authorization': `key=${firebaseConfig.apiKey}`
+      },
+      body: JSON.stringify({
+        to: targetToken,
+        notification: {
+          title: `Входящий звонок`,
+          body: `${callerName} звонит вам!`,
+          icon: '/favicon.ico',
+          click_action: window.location.origin
+        },
+        data: {
+          callerName: callerName,
+          url: window.location.href
+        }
+      })
+    });
+  } catch (e) {
+    console.warn('Не удалось отправить прямой Push:', e);
   }
 }
 
@@ -248,6 +282,7 @@ function initPeer() {
   });
 
   peer.on('call', (call) => {
+    // Автоответ если мы подтвердили звонок в модальном окне
     call.answer(localStream);
     handleStream(call);
   });
@@ -289,7 +324,7 @@ function renderUserList() {
     const callBtn = document.createElement('button');
     callBtn.textContent = 'Позвонить';
     callBtn.disabled = !u.online && !u.fcmToken;
-    callBtn.onclick = () => startCall(uid, u.name, u.peerId);
+    callBtn.onclick = () => startCall(uid, u.name, u.peerId, u.fcmToken);
 
     li.appendChild(info);
     li.appendChild(callBtn);
@@ -300,21 +335,43 @@ function renderUserList() {
 searchInput.addEventListener('input', renderUserList);
 
 // === 10. ЗВОНКИ ===
-function startCall(targetUid, targetName, targetPeerId) {
+function startCall(targetUid, targetName, targetPeerId, targetFcmToken) {
+  callingTargetId = targetUid;
   statusElem.textContent = `Вызов ${targetName}...`;
-  
+  callControls.classList.remove('hidden');
+  remoteLabel.textContent = targetName;
+
+  // 1. Запись сигнала звонка в Realtime Database
   db.ref(`calls/${targetUid}`).set({
     callerId: currentUser.id,
     callerName: currentUser.username,
     callerPeerId: peer ? peer.id : null,
+    status: 'ringing',
     timestamp: Date.now()
   });
 
+  // 2. Отправка Push-уведомления (на случай если закрыта вкладка)
+  if (targetFcmToken) {
+    sendPushNotification(targetFcmToken, currentUser.username);
+  }
+
+  // 3. Звонок через PeerJS
   if (targetPeerId) {
     const call = peer.call(targetPeerId, localStream);
     handleStream(call);
   }
-  remoteLabel.textContent = targetName;
+
+  // 4. Слушаем ответ (принял/отклонил)
+  const myCallOutRef = db.ref(`calls/${targetUid}`);
+  myCallOutRef.on('value', (snap) => {
+    const val = snap.val();
+    if (!val && callingTargetId) {
+      // Запись удалена = собеседник отклонил или звонок сброшен
+      endCallUI();
+      statusElem.textContent = 'Вызов отклонен собеседником.';
+      myCallOutRef.off();
+    }
+  });
 }
 
 function listenToIncomingCalls() {
@@ -322,7 +379,7 @@ function listenToIncomingCalls() {
   
   callRef.on('value', (snapshot) => {
     const data = snapshot.val();
-    if (data && data.callerPeerId) {
+    if (data && data.callerPeerId && data.status === 'ringing') {
       pendingIncomingCall = data;
       callerNameElem.textContent = `${data.callerName} звонит вам...`;
       incomingModal.classList.remove('hidden');
@@ -335,22 +392,29 @@ function listenToIncomingCalls() {
   });
 }
 
+// Кнопка: Принять
 acceptCallBtn.onclick = () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
   if (pendingIncomingCall) {
     remoteLabel.textContent = pendingIncomingCall.callerName;
-    db.ref(`calls/${currentUser.id}`).remove();
-    statusElem.textContent = 'Соединение...';
+    statusElem.textContent = 'Соединение установлено!';
+    // Обновляем статус, чтобы звонящий знал что мы ответили
+    db.ref(`calls/${currentUser.id}`).update({ status: 'connected' });
   }
 };
 
+// Кнопка: Отклонить
 rejectCallBtn.onclick = () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
+  // Полностью очищаем звонок, вызывая сброс и у звонящего
   db.ref(`calls/${currentUser.id}`).remove();
+  pendingIncomingCall = null;
+  statusElem.textContent = 'Вызов отклонен.';
 };
 
+// Обработка видеопотоков
 function handleStream(call) {
   currentCall = call;
   callControls.classList.remove('hidden');
@@ -372,20 +436,22 @@ function endCallUI() {
   remoteVideo.srcObject = null;
   remoteLabel.textContent = 'Собеседник';
   callControls.classList.add('hidden');
-  statusElem.textContent = 'Звонок завершен.';
+  callingTargetId = null;
+  stopRingtone();
 }
 
 hangupBtn.onclick = () => {
-  endCallUI();
+  if (callingTargetId) {
+    db.ref(`calls/${callingTargetId}`).remove();
+  }
   if (currentUser) {
     db.ref(`calls/${currentUser.id}`).remove();
   }
+  endCallUI();
+  statusElem.textContent = 'Звонок завершен.';
 };
 
 authBtn.addEventListener('click', handleAuth);
 logoutBtn.addEventListener('click', logout);
-if (enableNotifBtn) {
-  enableNotifBtn.addEventListener('click', requestNotificationPermission);
-}
 
 initMedia();
