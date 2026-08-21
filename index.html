@@ -3,99 +3,118 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Видеочат по комнатам</title>
+  <title>P2P Видеозвонки</title>
   <style>
+    :root {
+      --bg: #121212;
+      --card-bg: #1e1e1e;
+      --border: #333;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --danger: #dc2626;
+      --danger-hover: #b91c1c;
+      --text: #eaeaea;
+      --muted: #888;
+    }
+
+    * { box-sizing: border-box; }
     body {
       font-family: system-ui, -apple-system, sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 24px;
-      background: #121212;
-      color: #eaeaea;
+      padding: 20px;
+      background: var(--bg);
+      color: var(--text);
       margin: 0;
+      min-height: 100vh;
     }
-    h1 {
-      margin-bottom: 8px;
-      font-size: 24px;
-    }
+
+    h1 { margin: 0 0 16px; font-size: 22px; }
+    
     .card {
-      background: #1e1e1e;
-      border: 1px solid #333;
-      padding: 16px 20px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 20px;
       border-radius: 12px;
       width: 100%;
-      max-width: 480px;
+      max-width: 440px;
       margin-bottom: 20px;
-      box-sizing: border-box;
     }
-    .input-row {
-      display: flex;
-      gap: 8px;
-      margin-top: 10px;
-    }
+
     input {
-      flex: 1;
+      width: 100%;
       padding: 10px 14px;
       border-radius: 8px;
       border: 1px solid #444;
       background: #2a2a2a;
       color: #fff;
       font-size: 15px;
+      margin-bottom: 12px;
     }
-    input:disabled {
-      background: #1c1c1c;
-      color: #777;
-      border-color: #333;
-    }
+    input:focus { outline: none; border-color: var(--primary); }
+
     button {
+      width: 100%;
       padding: 10px 16px;
       border-radius: 8px;
       border: none;
+      background: var(--primary);
+      color: #fff;
       font-weight: 500;
       cursor: pointer;
       font-size: 15px;
       transition: background 0.2s;
     }
-    #join-btn {
-      background: #2563eb;
-      color: #fff;
+    button:hover { background: var(--primary-hover); }
+    button.danger { background: var(--danger); }
+    button.danger:hover { background: var(--danger-hover); }
+
+    #status {
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: #60a5fa;
+      text-align: center;
     }
-    #join-btn:hover {
-      background: #1d4ed8;
-    }
-    #leave-btn {
-      background: #dc2626;
-      color: #fff;
-      display: none;
-    }
-    #leave-btn:hover {
-      background: #b91c1c;
-    }
-    .room-tags-wrapper {
-      margin-top: 16px;
-      border-top: 1px solid #2e2e2e;
-      padding-top: 12px;
-    }
-    .room-tags {
+
+    /* Список контактов */
+    .user-list-header {
       display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-top: 8px;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
     }
-    .tag {
-      background: #2a2a2a;
-      border: 1px solid #444;
+    .user-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .user-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #262626;
+      margin-bottom: 8px;
+    }
+    .user-info { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #555;
+    }
+    .status-dot.online { background: #22c55e; }
+    .user-item button {
+      width: auto;
       padding: 6px 12px;
-      border-radius: 6px;
       font-size: 13px;
-      cursor: pointer;
-      transition: all 0.2s;
     }
-    .tag:hover {
-      background: #383838;
-      border-color: #60a5fa;
-    }
+
+    /* Видео карточки */
     .video-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -104,18 +123,14 @@
       max-width: 800px;
     }
     .video-card {
-      background: #1e1e1e;
+      background: var(--card-bg);
       border-radius: 12px;
-      padding: 10px;
+      padding: 12px;
       display: flex;
       flex-direction: column;
       align-items: center;
     }
-    .video-card span {
-      margin-bottom: 8px;
-      font-size: 14px;
-      color: #888;
-    }
+    .video-card span { margin-bottom: 8px; font-size: 14px; color: var(--muted); }
     video {
       width: 100%;
       height: 240px;
@@ -123,50 +138,97 @@
       border-radius: 8px;
       object-fit: cover;
     }
-    #status {
-      margin-bottom: 16px;
-      font-size: 14px;
-      color: #60a5fa;
-      text-align: center;
-      min-height: 20px;
+
+    .call-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+      width: 100%;
+      max-width: 800px;
     }
+
+    /* Модальное окно звонка */
+    .incoming-modal {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+    }
+    .modal-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+      width: 320px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .modal-card h3 { margin-top: 0; }
+    .modal-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .hidden { display: none !important; }
   </style>
 
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
-  <!-- PeerJS -->
+  <!-- Firebase SDK (v8) & PeerJS -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
 
-  <h1>Petkov видеочат</h1>
-  <div id="status">Инициализация камеры...</div>
+  <h1>P2P Видеочат</h1>
+  <div id="status">Инициализация...</div>
 
-  <div class="card" id="room-controls">
-    <label for="room-input" style="font-size: 14px; color: #aaa;">Введите имя комнаты:</label>
-    <div class="input-row">
-      <input type="text" id="room-input" placeholder="например, room-1">
-      <button id="join-btn">Войти</button>
-      <button id="leave-btn">Выйти</button>
-    </div>
-
-    <div class="room-tags-wrapper">
-      <div style="font-size: 13px; color: #aaa;">Комнаты, где ждут собеседника (1/2):</div>
-      <div id="rooms-list" class="room-tags">
-        <span style="color: #666; font-size: 13px;">Поиск комнат...</span>
-      </div>
-    </div>
+  <!-- 1. Экран авторизации / Регистрации -->
+  <div class="card" id="auth-box">
+    <h3 style="margin-top:0;">Вход / Регистрация</h3>
+    <input type="text" id="username" placeholder="Имя пользователя (логин)">
+    <input type="password" id="password" placeholder="Пароль">
+    <button id="auth-btn">Войти / Зарегистрироваться</button>
   </div>
 
+  <!-- 2. Панель контактов и поиска -->
+  <div class="card hidden" id="contacts-box">
+    <div class="user-list-header">
+      <span id="current-user-label" style="font-weight: 600; color: #fff;"></span>
+      <button id="logout-btn" style="width: auto; padding: 4px 10px; font-size: 12px;" class="danger">Выйти</button>
+    </div>
+    <input type="text" id="search-input" placeholder="Поиск контактов...">
+    <ul class="user-list" id="users-list"></ul>
+  </div>
+
+  <!-- 3. Сетка видеозвонка -->
   <div class="video-grid">
     <div class="video-card">
       <span>Вы</span>
       <video id="local-video" autoplay muted playsinline></video>
     </div>
     <div class="video-card">
-      <span>Собеседник</span>
+      <span id="remote-label">Собеседник</span>
       <video id="remote-video" autoplay playsinline></video>
+    </div>
+  </div>
+
+  <div class="call-actions hidden" id="call-controls">
+    <button id="hangup-btn" class="danger">Завершить звонок</button>
+  </div>
+
+  <!-- 4. Модальное окно входящего вызова -->
+  <div class="incoming-modal hidden" id="incoming-modal">
+    <div class="modal-card">
+      <h3>Входящий звонок</h3>
+      <p id="caller-name">Пользователь звонит вам...</p>
+      <div class="modal-actions">
+        <button id="accept-call-btn" style="background:#22c55e;">Принять</button>
+        <button id="reject-call-btn" class="danger">Отклонить</button>
+      </div>
     </div>
   </div>
 
