@@ -11,6 +11,8 @@
       --border: #333;
       --primary: #2563eb;
       --primary-hover: #1d4ed8;
+      --success: #16a34a;
+      --success-hover: #15803d;
       --danger: #dc2626;
       --danger-hover: #b91c1c;
       --text: #eaeaea;
@@ -67,6 +69,8 @@
       transition: background 0.2s;
     }
     button:hover { background: var(--primary-hover); }
+    button.success { background: var(--success); }
+    button.success:hover { background: var(--success-hover); }
     button.danger { background: var(--danger); }
     button.danger:hover { background: var(--danger-hover); }
 
@@ -198,6 +202,11 @@
       <span id="current-user-label" style="font-weight: 600; color: #fff;"></span>
       <button id="logout-btn" style="width: auto; padding: 4px 10px; font-size: 12px;" class="danger">Выйти</button>
     </div>
+    
+    <button id="enable-notifications-btn" class="success" style="margin-bottom: 12px; font-size: 13px; padding: 8px;">
+      🔔 Включить уведомления о звонках
+    </button>
+
     <input type="text" id="search-input" placeholder="Поиск контактов...">
     <ul class="user-list" id="users-list"></ul>
   </div>
@@ -224,7 +233,7 @@
       <h3>Входящий звонок</h3>
       <p id="caller-name">Пользователь звонит вам...</p>
       <div class="modal-actions">
-        <button id="accept-call-btn" style="background:#22c55e;">Принять</button>
+        <button id="accept-call-btn" class="success">Принять</button>
         <button id="reject-call-btn" class="danger">Отклонить</button>
       </div>
     </div>
