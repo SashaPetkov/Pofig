@@ -71,28 +71,32 @@ let audioCtx = null;
 
 function playRingtone() {
   stopRingtone();
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  
-  function beep() {
-    if (!audioCtx) return;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(440, audioCtx.currentTime);
-    osc.frequency.setValueAtTime(480, audioCtx.currentTime + 0.05);
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     
-    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.2);
-    
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    
-    osc.start();
-    osc.stop(audioCtx.currentTime + 1.2);
-  }
+    function beep() {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+      osc.frequency.setValueAtTime(480, audioCtx.currentTime + 0.05);
+      
+      gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.2);
+      
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      
+      osc.start();
+      osc.stop(audioCtx.currentTime + 1.2);
+    }
 
-  beep();
-  ringtoneInterval = setInterval(beep, 3000);
+    beep();
+    ringtoneInterval = setInterval(beep, 3000);
+  } catch (e) {
+    console.warn("Автовоспроизведение звука заблокировано браузером до клика:", e);
+  }
 }
 
 function stopRingtone() {
@@ -119,6 +123,28 @@ async function initMedia() {
 }
 
 // === 6. НАСТРОЙКА PUSH-УВЕДОМЛЕНИЙ ===
+async function getAndSaveFcmToken(userId) {
+  if (!messaging || !('serviceWorker' in navigator)) return null;
+
+  try {
+    const registration = await navigator.serviceWorker.register('./firebase-messaging-sw.js', { scope: './' });
+    const freshToken = await messaging.getToken({
+      vapidKey: VAPID_KEY,
+      serviceWorkerRegistration: registration
+    });
+
+    if (freshToken && userId) {
+      await db.ref(`users/${userId}`).update({ fcmToken: freshToken });
+      console.log('Свежий FCM токен сохранен в базе:', freshToken);
+      if (enableNotifBtn) enableNotifBtn.style.display = 'none';
+      return freshToken;
+    }
+  } catch (err) {
+    console.error('Ошибка получения FCM токена:', err);
+  }
+  return null;
+}
+
 if (enableNotifBtn) {
   enableNotifBtn.addEventListener('click', () => {
     if (!messaging || !('serviceWorker' in navigator)) {
@@ -128,21 +154,11 @@ if (enableNotifBtn) {
 
     Notification.requestPermission().then(async (permission) => {
       if (permission === 'granted') {
-        try {
-          const registration = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
-          const currentToken = await messaging.getToken({
-            vapidKey: VAPID_KEY,
-            serviceWorkerRegistration: registration
-          });
-
-          if (currentToken && currentUser) {
-            await db.ref(`users/${currentUser.id}`).update({ fcmToken: currentToken });
-            enableNotifBtn.style.display = 'none';
-            alert('Уведомления успешно активированы!');
-          }
-        } catch (err) {
-          console.error('Ошибка получения токена:', err);
-          alert('Ошибка настройки: ' + err.message);
+        const token = await getAndSaveFcmToken(currentUser?.id);
+        if (token) {
+          alert('Уведомления успешно активированы!');
+        } else {
+          alert('Не удалось получить токен. Проверьте консоль F12.');
         }
       } else {
         alert('Разрешение на отправку уведомлений отклонено.');
@@ -231,7 +247,7 @@ async function handleAuth() {
   }
 }
 
-function loginSuccess(userId, displayName) {
+async function loginSuccess(userId, displayName) {
   currentUser = { id: userId, username: displayName };
   localStorage.setItem('auth_user', JSON.stringify({ id: userId, username: displayName }));
 
@@ -239,8 +255,10 @@ function loginSuccess(userId, displayName) {
   contactsBox.classList.remove('hidden');
   currentUserLabel.textContent = `Вы: ${displayName}`;
 
-  if (Notification.permission === 'granted' && enableNotifBtn) {
-    enableNotifBtn.style.display = 'none';
+  // Автоматически обновляем токен в базе при входе, если разрешение уже есть
+  if (Notification.permission === 'granted') {
+    if (enableNotifBtn) enableNotifBtn.style.display = 'none';
+    getAndSaveFcmToken(userId);
   }
 
   initPeer();
@@ -365,13 +383,13 @@ function startCall(targetUid, targetName, targetPeerId, targetFcmToken) {
     sendPushNotification(targetFcmToken, currentUser.username);
   }
 
-  // 3. WebRTC-вызов через PeerJS
+  // 3. WebRTC-вызов через PeerJS (если адресат в сети)
   if (targetPeerId) {
     const call = peer.call(targetPeerId, localStream);
     handleStream(call);
   }
 
-  // 4. Слушаем статус звонка
+  // 4. Слушаем статус звонка (если сбросили / отклонили)
   const myCallOutRef = db.ref(`calls/${targetUid}`);
   myCallOutRef.on('value', (snap) => {
     const val = snap.val();
@@ -403,6 +421,7 @@ function listenToIncomingCalls() {
   });
 }
 
+// Кнопка: Принять
 acceptCallBtn.onclick = () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
@@ -413,6 +432,7 @@ acceptCallBtn.onclick = () => {
   }
 };
 
+// Кнопка: Отклонить
 rejectCallBtn.onclick = () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
