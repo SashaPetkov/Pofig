@@ -1,3 +1,4 @@
+// firebase-messaging-sw.js
 importScripts('https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js');
 importScripts('https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js');
 
@@ -15,30 +16,33 @@ firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
-  const notificationTitle = payload.notification?.title || 'Входящий звонок';
-  const notificationOptions = {
-    body: payload.notification?.body || 'Вам звонят в видеочате!',
+  const title = payload.notification?.title || payload.data?.title || 'Входящий звонок';
+  const options = {
+    body: payload.notification?.body || payload.data?.body || 'Вам звонят в видеочате!',
+    icon: 'https://cdn-icons-png.flaticon.com/512/724/724664.png',
     requireInteraction: true,
-    vibrate: [300, 100, 300, 100, 300],
+    vibrate: [500, 200, 500, 200, 500],
     data: {
-      url: payload.data?.url || '/'
+      url: payload.data?.url || payload.fcmOptions?.link || '/'
     }
   };
 
-  self.registration.showNotification(notificationTitle, notificationOptions);
+  self.registration.showNotification(title, options);
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const targetUrl = event.notification.data?.url || '/';
+  
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
-        if (client.url.includes(self.location.origin) && 'focus' in client) {
+        if ('focus' in client) {
           return client.focus();
         }
       }
       if (clients.openWindow) {
-        return clients.openWindow(event.notification.data?.url || '/');
+        return clients.openWindow(targetUrl);
       }
     })
   );
