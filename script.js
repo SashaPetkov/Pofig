@@ -42,6 +42,7 @@ const usernameInput = document.getElementById('username');
 const passwordInput = document.getElementById('password');
 const authBtn = document.getElementById('auth-btn');
 const logoutBtn = document.getElementById('logout-btn');
+const enableNotifBtn = document.getElementById('enable-notifications-btn');
 const searchInput = document.getElementById('search-input');
 const usersList = document.getElementById('users-list');
 const localVideo = document.getElementById('local-video');
@@ -115,26 +116,34 @@ async function initMedia() {
   }
 }
 
-// === 6. РЕГИСТРАЦИЯ PUSH-ТОКЕНА ===
-async function setupPushNotifications(userId) {
-  if (!messaging || !('serviceWorker' in navigator)) return;
+// === 6. РУЧНОЙ ЗАПРОС НА PUSH-УВЕДОМЛЕНИЯ ===
+async function requestNotificationPermission() {
+  if (!messaging || !('serviceWorker' in navigator)) {
+    alert('Ваш браузер не поддерживает Push-уведомления.');
+    return;
+  }
 
   try {
-    const registration = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
     const permission = await Notification.requestPermission();
     
     if (permission === 'granted') {
+      const registration = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
       const currentToken = await messaging.getToken({
         vapidKey: VAPID_KEY,
         serviceWorkerRegistration: registration
       });
 
-      if (currentToken) {
-        db.ref(`users/${userId}`).update({ fcmToken: currentToken });
+      if (currentToken && currentUser) {
+        await db.ref(`users/${currentUser.id}`).update({ fcmToken: currentToken });
+        enableNotifBtn.style.display = 'none';
+        alert('Уведомления успешно включены!');
       }
+    } else {
+      alert('Разрешение на отправку уведомлений отклонено.');
     }
   } catch (err) {
-    console.warn('Push-уведомления не зарегистрированы:', err);
+    console.error('Ошибка при включении уведомлений:', err);
+    alert('Ошибка: ' + err.message);
   }
 }
 
@@ -185,10 +194,13 @@ function loginSuccess(userId, displayName) {
   contactsBox.classList.remove('hidden');
   currentUserLabel.textContent = `Вы: ${displayName}`;
 
+  if (Notification.permission === 'granted') {
+    enableNotifBtn.style.display = 'none';
+  }
+
   initPeer();
   listenToIncomingCalls();
   listenToUsers();
-  setupPushNotifications(userId);
 }
 
 function checkCachedAuth() {
@@ -372,5 +384,8 @@ hangupBtn.onclick = () => {
 
 authBtn.addEventListener('click', handleAuth);
 logoutBtn.addEventListener('click', logout);
+if (enableNotifBtn) {
+  enableNotifBtn.addEventListener('click', requestNotificationPermission);
+}
 
 initMedia();
