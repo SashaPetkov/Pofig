@@ -1,4 +1,4 @@
-// === 1. КОНФИГУРАЦИЯ FIREBASE ===
+// === 1. КОНФИГУРАЦИЯ FIREBASE И VERCEL ===
 const firebaseConfig = {
   apiKey: "AIzaSyBxTAoazwGTahOMpRpssdZqxn2wJ7cLC2s",
   authDomain: "pofig-b630a.firebaseapp.com",
@@ -11,6 +11,7 @@ const firebaseConfig = {
 };
 
 const VAPID_KEY = "BBwb8bwPePgZVSKL27jdsJICW-zgAnIUYF65wfhLVHWHe3E0G_YA4Lmt-Vozprs_1vWW54SKBGC3tRxRG9SGErM";
+const PUSH_SERVER_URL = "https://petcall.vercel.app/api/send-push";
 
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
@@ -20,7 +21,7 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
   try {
     messaging = firebase.messaging();
   } catch (e) {
-    console.warn("Messaging не поддерживается:", e);
+    console.warn("Firebase Messaging не поддерживается:", e);
   }
 }
 
@@ -113,7 +114,7 @@ async function initMedia() {
     statusElem.textContent = 'Камера и микрофон готовы';
     checkCachedAuth();
   } catch (err) {
-    statusElem.textContent = 'Ошибка доступа: ' + err.message;
+    statusElem.textContent = 'Ошибка доступа к медиа: ' + err.message;
   }
 }
 
@@ -121,7 +122,7 @@ async function initMedia() {
 if (enableNotifBtn) {
   enableNotifBtn.addEventListener('click', () => {
     if (!messaging || !('serviceWorker' in navigator)) {
-      alert('Push-уведомления не поддерживаются вашим браузером.');
+      alert('Push-уведомления не поддерживаются в этом браузере.');
       return;
     }
 
@@ -137,47 +138,57 @@ if (enableNotifBtn) {
           if (currentToken && currentUser) {
             await db.ref(`users/${currentUser.id}`).update({ fcmToken: currentToken });
             enableNotifBtn.style.display = 'none';
-            alert('Уведомления успешно включены!');
+            alert('Уведомления успешно активированы!');
           }
         } catch (err) {
-          console.error('Ошибка токена:', err);
+          console.error('Ошибка получения токена:', err);
           alert('Ошибка настройки: ' + err.message);
         }
       } else {
-        alert('Разрешение отклонено.');
+        alert('Разрешение на отправку уведомлений отклонено.');
       }
     });
   });
 }
 
-// Отправка системного Web-Push через FCM
+// Отправка Push-уведомления через Vercel Serverless
 async function sendPushNotification(targetToken, callerName) {
   if (!targetToken) return;
+
   try {
-    // Вызов встроенного сервиса отправки
-    await fetch('https://fcm.googleapis.com/fcm/send', {
+    const response = await fetch(PUSH_SERVER_URL, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        // Используем публичный Web API ключ Firebase
-        'Authorization': `key=${firebaseConfig.apiKey}`
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        to: targetToken,
-        notification: {
-          title: `Входящий звонок`,
-          body: `${callerName} звонит вам!`,
-          icon: '/favicon.ico',
-          click_action: window.location.origin
-        },
-        data: {
-          callerName: callerName,
-          url: window.location.href
-        }
+        token: targetToken,
+        callerName: callerName,
+        url: window.location.href
       })
     });
-  } catch (e) {
-    console.warn('Не удалось отправить прямой Push:', e);
+
+    const result = await response.json();
+    console.log('Ответ Vercel Push Server:', result);
+  } catch (err) {
+    console.error('Ошибка отправки через Vercel:', err);
+  }
+}
+
+// Системный баннер если вкладка открыта
+function showDesktopNotification(callerName) {
+  if (Notification.permission === 'granted') {
+    const notif = new Notification('Входящий видеозвонок', {
+      body: `${callerName} звонит вам!`,
+      icon: 'https://cdn-icons-png.flaticon.com/512/724/724664.png',
+      requireInteraction: true,
+      tag: 'incoming-call'
+    });
+
+    notif.onclick = () => {
+      window.focus();
+      notif.close();
+    };
   }
 }
 
@@ -228,7 +239,7 @@ function loginSuccess(userId, displayName) {
   contactsBox.classList.remove('hidden');
   currentUserLabel.textContent = `Вы: ${displayName}`;
 
-  if (Notification.permission === 'granted') {
+  if (Notification.permission === 'granted' && enableNotifBtn) {
     enableNotifBtn.style.display = 'none';
   }
 
@@ -282,7 +293,6 @@ function initPeer() {
   });
 
   peer.on('call', (call) => {
-    // Автоответ если мы подтвердили звонок в модальном окне
     call.answer(localStream);
     handleStream(call);
   });
@@ -350,25 +360,24 @@ function startCall(targetUid, targetName, targetPeerId, targetFcmToken) {
     timestamp: Date.now()
   });
 
-  // 2. Отправка Push-уведомления (на случай если закрыта вкладка)
+  // 2. Отправка Push-уведомления через Vercel
   if (targetFcmToken) {
     sendPushNotification(targetFcmToken, currentUser.username);
   }
 
-  // 3. Звонок через PeerJS
+  // 3. WebRTC-вызов через PeerJS
   if (targetPeerId) {
     const call = peer.call(targetPeerId, localStream);
     handleStream(call);
   }
 
-  // 4. Слушаем ответ (принял/отклонил)
+  // 4. Слушаем статус звонка
   const myCallOutRef = db.ref(`calls/${targetUid}`);
   myCallOutRef.on('value', (snap) => {
     const val = snap.val();
     if (!val && callingTargetId) {
-      // Запись удалена = собеседник отклонил или звонок сброшен
       endCallUI();
-      statusElem.textContent = 'Вызов отклонен собеседником.';
+      statusElem.textContent = 'Вызов отклонен.';
       myCallOutRef.off();
     }
   });
@@ -383,7 +392,9 @@ function listenToIncomingCalls() {
       pendingIncomingCall = data;
       callerNameElem.textContent = `${data.callerName} звонит вам...`;
       incomingModal.classList.remove('hidden');
+      
       playRingtone();
+      showDesktopNotification(data.callerName);
     } else {
       incomingModal.classList.add('hidden');
       stopRingtone();
@@ -392,29 +403,24 @@ function listenToIncomingCalls() {
   });
 }
 
-// Кнопка: Принять
 acceptCallBtn.onclick = () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
   if (pendingIncomingCall) {
     remoteLabel.textContent = pendingIncomingCall.callerName;
-    statusElem.textContent = 'Соединение установлено!';
-    // Обновляем статус, чтобы звонящий знал что мы ответили
+    statusElem.textContent = 'Соединение...';
     db.ref(`calls/${currentUser.id}`).update({ status: 'connected' });
   }
 };
 
-// Кнопка: Отклонить
 rejectCallBtn.onclick = () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
-  // Полностью очищаем звонок, вызывая сброс и у звонящего
   db.ref(`calls/${currentUser.id}`).remove();
   pendingIncomingCall = null;
   statusElem.textContent = 'Вызов отклонен.';
 };
 
-// Обработка видеопотоков
 function handleStream(call) {
   currentCall = call;
   callControls.classList.remove('hidden');
