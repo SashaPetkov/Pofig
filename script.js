@@ -60,6 +60,7 @@ const rejectCallBtn = document.getElementById('reject-call-btn');
 let currentUser = null;
 let localStream = null;
 let peer = null;
+let peerReady = false;
 let currentCall = null;
 let allUsers = {};
 let pendingIncomingCall = null;
@@ -157,8 +158,6 @@ if (enableNotifBtn) {
         const token = await getAndSaveFcmToken(currentUser?.id);
         if (token) {
           alert('Уведомления успешно активированы!');
-        } else {
-          alert('Не удалось получить токен. Проверьте консоль F12.');
         }
       } else {
         alert('Разрешение на отправку уведомлений отклонено.');
@@ -167,7 +166,7 @@ if (enableNotifBtn) {
   });
 }
 
-// Отправка Push-уведомления через Vercel Serverless
+// Отправка Push-уведомления через Vercel
 async function sendPushNotification(targetToken, callerName) {
   if (!targetToken) return;
 
@@ -191,7 +190,6 @@ async function sendPushNotification(targetToken, callerName) {
   }
 }
 
-// Системный баннер если вкладка открыта
 function showDesktopNotification(callerName) {
   if (Notification.permission === 'granted') {
     const notif = new Notification('Входящий видеозвонок', {
@@ -255,7 +253,6 @@ async function loginSuccess(userId, displayName) {
   contactsBox.classList.remove('hidden');
   currentUserLabel.textContent = `Вы: ${displayName}`;
 
-  // Автоматически обновляем токен в базе при входе, если разрешение уже есть
   if (Notification.permission === 'granted') {
     if (enableNotifBtn) enableNotifBtn.style.display = 'none';
     getAndSaveFcmToken(userId);
@@ -294,6 +291,7 @@ function initPeer() {
   peer = new Peer(customPeerId, peerConfig);
 
   peer.on('open', (id) => {
+    peerReady = true;
     statusElem.textContent = 'В сети. Готов к звонкам.';
     
     const myRef = db.ref(`users/${currentUser.id}`);
@@ -310,6 +308,7 @@ function initPeer() {
     });
   });
 
+  // Принимаем вызов от звонящего после рукопожатия
   peer.on('call', (call) => {
     call.answer(localStream);
     handleStream(call);
@@ -352,7 +351,7 @@ function renderUserList() {
     const callBtn = document.createElement('button');
     callBtn.textContent = 'Позвонить';
     callBtn.disabled = !u.online && !u.fcmToken;
-    callBtn.onclick = () => startCall(uid, u.name, u.peerId, u.fcmToken);
+    callBtn.onclick = () => startCall(uid, u.name, u.fcmToken);
 
     li.appendChild(info);
     li.appendChild(callBtn);
@@ -362,15 +361,16 @@ function renderUserList() {
 
 searchInput.addEventListener('input', renderUserList);
 
-// === 10. ЗВОНКИ ===
-function startCall(targetUid, targetName, targetPeerId, targetFcmToken) {
+// === 10. ЗВОНКИ И РУКОПОЖАТИЕ ===
+function startCall(targetUid, targetName, targetFcmToken) {
   callingTargetId = targetUid;
-  statusElem.textContent = `Вызов ${targetName}...`;
+  statusElem.textContent = `Вызов ${targetName}... Ждём ответа`;
   callControls.classList.remove('hidden');
   remoteLabel.textContent = targetName;
 
-  // 1. Запись сигнала звонка в Realtime Database
-  db.ref(`calls/${targetUid}`).set({
+  // 1. Создаем звонок со статусом ringing в базе
+  const callRef = db.ref(`calls/${targetUid}`);
+  callRef.set({
     callerId: currentUser.id,
     callerName: currentUser.username,
     callerPeerId: peer ? peer.id : null,
@@ -378,57 +378,72 @@ function startCall(targetUid, targetName, targetPeerId, targetFcmToken) {
     timestamp: Date.now()
   });
 
-  // 2. Отправка Push-уведомления через Vercel
+  // 2. Отправляем Push-уведомление через Vercel
   if (targetFcmToken) {
     sendPushNotification(targetFcmToken, currentUser.username);
   }
 
-  // 3. WebRTC-вызов через PeerJS (если адресат в сети)
-  if (targetPeerId) {
-    const call = peer.call(targetPeerId, localStream);
-    handleStream(call);
-  }
-
-  // 4. Слушаем статус звонка (если сбросили / отклонили)
-  const myCallOutRef = db.ref(`calls/${targetUid}`);
-  myCallOutRef.on('value', (snap) => {
-    const val = snap.val();
-    if (!val && callingTargetId) {
+  // 3. Звонящий слушает ответ адресата:
+  callRef.on('value', (snap) => {
+    const data = snap.val();
+    
+    // Если адресат нажал "Принять" и прислал свой актуальный peerId
+    if (data && data.status === 'accepted' && data.calleePeerId) {
+      statusElem.textContent = 'Соединение установлено!';
+      // Инициируем WebRTC звонок на точный ID открывшейся вкладки
+      if (!currentCall && peer) {
+        const call = peer.call(data.calleePeerId, localStream);
+        handleStream(call);
+      }
+    } else if (!data && callingTargetId) {
+      // Звонок сброшен / отклонен
       endCallUI();
-      statusElem.textContent = 'Вызов отклонен.';
-      myCallOutRef.off();
+      statusElem.textContent = 'Вызов отклонен или завершен.';
+      callRef.off();
     }
   });
 }
 
+// Слушатель входящих звонков для принимающего
 function listenToIncomingCalls() {
   const callRef = db.ref(`calls/${currentUser.id}`);
   
   callRef.on('value', (snapshot) => {
     const data = snapshot.val();
-    if (data && data.callerPeerId && data.status === 'ringing') {
+    if (data && data.status === 'ringing') {
       pendingIncomingCall = data;
       callerNameElem.textContent = `${data.callerName} звонит вам...`;
       incomingModal.classList.remove('hidden');
       
       playRingtone();
       showDesktopNotification(data.callerName);
-    } else {
+    } else if (!data || data.status !== 'ringing') {
       incomingModal.classList.add('hidden');
       stopRingtone();
-      pendingIncomingCall = null;
+      if (!data) pendingIncomingCall = null;
     }
   });
 }
 
 // Кнопка: Принять
-acceptCallBtn.onclick = () => {
+acceptCallBtn.onclick = async () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
+  
   if (pendingIncomingCall) {
     remoteLabel.textContent = pendingIncomingCall.callerName;
     statusElem.textContent = 'Соединение...';
-    db.ref(`calls/${currentUser.id}`).update({ status: 'connected' });
+    
+    // Ждем инициализации peer, если вкладка только что открылась
+    if (!peerReady) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Сообщаем звонящему, что мы приняли звонок и передаем наш свежий peer.id
+    db.ref(`calls/${currentUser.id}`).update({
+      status: 'accepted',
+      calleePeerId: peer.id
+    });
   }
 };
 
@@ -441,6 +456,7 @@ rejectCallBtn.onclick = () => {
   statusElem.textContent = 'Вызов отклонен.';
 };
 
+// Обработка видеопотока
 function handleStream(call) {
   currentCall = call;
   callControls.classList.remove('hidden');
