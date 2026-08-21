@@ -10,11 +10,20 @@ const firebaseConfig = {
   measurementId: "G-9CRL2X1NCE"
 };
 
-// Инициализация Firebase
+const VAPID_KEY = "BBwb8bwPePgZVSKL27jdsJICW-zgAnIUYF65wfhLVHWHe3E0G_YA4Lmt-Vozprs_1vWW54SKBGC3tRxRG9SGErM";
+
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
+let messaging = null;
 
-// STUN-серверы для WebRTC
+if ('serviceWorker' in navigator && 'PushManager' in window) {
+  try {
+    messaging = firebase.messaging();
+  } catch (e) {
+    console.warn("Messaging не поддерживается:", e);
+  }
+}
+
 const peerConfig = {
   config: {
     iceServers: [
@@ -46,7 +55,7 @@ const acceptCallBtn = document.getElementById('accept-call-btn');
 const rejectCallBtn = document.getElementById('reject-call-btn');
 
 // === 3. СОСТОЯНИЕ ===
-let currentUser = null; // { id, username }
+let currentUser = null;
 let localStream = null;
 let peer = null;
 let currentCall = null;
@@ -54,7 +63,7 @@ let allUsers = {};
 let pendingIncomingCall = null;
 let ringtoneInterval = null;
 
-// === 4. ГЕНЕРАТОР ЗВУКА ЗВОНКА (Web Audio API) ===
+// === 4. ЗВУК ЗВОНКА (Web Audio API) ===
 let audioCtx = null;
 
 function playRingtone() {
@@ -66,8 +75,8 @@ function playRingtone() {
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(440, audioCtx.currentTime); // 440 Hz
-    osc.frequency.setValueAtTime(480, audioCtx.currentTime + 0.05); // Двухтональный гудок
+    osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+    osc.frequency.setValueAtTime(480, audioCtx.currentTime + 0.05);
     
     gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.2);
@@ -94,7 +103,7 @@ function stopRingtone() {
   }
 }
 
-// === 5. ИНИЦИАЛИЗАЦИЯ КАМЕРЫ И МИКРОФОНА ===
+// === 5. ИНИЦИАЛИЗАЦИЯ МЕДИА ===
 async function initMedia() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -102,11 +111,34 @@ async function initMedia() {
     statusElem.textContent = 'Камера и микрофон готовы';
     checkCachedAuth();
   } catch (err) {
-    statusElem.textContent = 'Ошибка доступа к устройствам: ' + err.message;
+    statusElem.textContent = 'Ошибка доступа: ' + err.message;
   }
 }
 
-// === 6. АВТОРИЗАЦИЯ, РЕГИСТРАЦИЯ И КЭШ ===
+// === 6. РЕГИСТРАЦИЯ PUSH-ТОКЕНА ===
+async function setupPushNotifications(userId) {
+  if (!messaging || !('serviceWorker' in navigator)) return;
+
+  try {
+    const registration = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
+    const permission = await Notification.requestPermission();
+    
+    if (permission === 'granted') {
+      const currentToken = await messaging.getToken({
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: registration
+      });
+
+      if (currentToken) {
+        db.ref(`users/${userId}`).update({ fcmToken: currentToken });
+      }
+    }
+  } catch (err) {
+    console.warn('Push-уведомления не зарегистрированы:', err);
+  }
+}
+
+// === 7. АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ===
 async function simpleHash(str) {
   const msgUint8 = new TextEncoder().encode(str);
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -119,7 +151,7 @@ async function handleAuth() {
   const password = passwordInput.value.trim();
 
   if (!username || !password) {
-    alert('Пожалуйста, введите логин и пароль (латинские буквы, цифры, дефис, подчеркивание)');
+    alert('Введите логин и пароль');
     return;
   }
 
@@ -129,14 +161,12 @@ async function handleAuth() {
   const userData = snapshot.val();
 
   if (userData) {
-    // Вход
     if (userData.passwordHash === passwordHash) {
       loginSuccess(username, userData.name);
     } else {
       alert('Неверный пароль!');
     }
   } else {
-    // Регистрация
     await userRef.set({
       name: username,
       passwordHash: passwordHash,
@@ -149,8 +179,6 @@ async function handleAuth() {
 
 function loginSuccess(userId, displayName) {
   currentUser = { id: userId, username: displayName };
-  
-  // Сохраняем сессию в LocalStorage
   localStorage.setItem('auth_user', JSON.stringify({ id: userId, username: displayName }));
 
   authBox.classList.add('hidden');
@@ -160,6 +188,7 @@ function loginSuccess(userId, displayName) {
   initPeer();
   listenToIncomingCalls();
   listenToUsers();
+  setupPushNotifications(userId);
 }
 
 function checkCachedAuth() {
@@ -184,7 +213,7 @@ function logout() {
   location.reload();
 }
 
-// === 7. СЕТЬ PEERJS И ОНЛАЙН СТАТУС ===
+// === 8. СЕТЬ PEERJS ===
 function initPeer() {
   const customPeerId = `user-${currentUser.id}-${Date.now().toString(36)}`;
   peer = new Peer(customPeerId, peerConfig);
@@ -192,7 +221,6 @@ function initPeer() {
   peer.on('open', (id) => {
     statusElem.textContent = 'В сети. Готов к звонкам.';
     
-    // Записываем онлайн-статус и текущий PeerID в базу
     const myRef = db.ref(`users/${currentUser.id}`);
     myRef.update({
       online: true,
@@ -200,7 +228,6 @@ function initPeer() {
       lastSeen: firebase.database.ServerValue.TIMESTAMP
     });
     
-    // Автоматический оффлайн при потере связи / закрытии вкладки
     myRef.onDisconnect().update({
       online: false,
       peerId: null,
@@ -208,7 +235,6 @@ function initPeer() {
     });
   });
 
-  // Принятие звонка через WebRTC
   peer.on('call', (call) => {
     call.answer(localStream);
     handleStream(call);
@@ -216,11 +242,11 @@ function initPeer() {
 
   peer.on('error', (err) => {
     console.error('PeerJS error:', err);
-    statusElem.textContent = 'Ошибка P2P: ' + err.type;
+    statusElem.textContent = 'Ошибка соединения: ' + err.type;
   });
 }
 
-// === 8. СПИСОК КОНТАКТОВ И ЖИВОЙ ПОИСК ===
+// === 9. КОНТАКТЫ ===
 function listenToUsers() {
   db.ref('users').on('value', (snapshot) => {
     allUsers = snapshot.val() || {};
@@ -233,7 +259,7 @@ function renderUserList() {
   const search = searchInput.value.toLowerCase().trim();
 
   Object.keys(allUsers).forEach((uid) => {
-    if (currentUser && uid === currentUser.id) return; // Пропускаем себя
+    if (currentUser && uid === currentUser.id) return;
 
     const u = allUsers[uid];
     if (search && !u.name.toLowerCase().includes(search)) return;
@@ -250,7 +276,7 @@ function renderUserList() {
 
     const callBtn = document.createElement('button');
     callBtn.textContent = 'Позвонить';
-    callBtn.disabled = !u.online;
+    callBtn.disabled = !u.online && !u.fcmToken;
     callBtn.onclick = () => startCall(uid, u.name, u.peerId);
 
     li.appendChild(info);
@@ -261,26 +287,21 @@ function renderUserList() {
 
 searchInput.addEventListener('input', renderUserList);
 
-// === 9. ЗВОНКИ И СИГНАЛИЗАЦИЯ ===
+// === 10. ЗВОНКИ ===
 function startCall(targetUid, targetName, targetPeerId) {
-  if (!targetPeerId) {
-    alert('Пользователь не в сети');
-    return;
-  }
-
   statusElem.textContent = `Вызов ${targetName}...`;
   
-  // Сигнализируем собеседнику в Firebase о звонке
   db.ref(`calls/${targetUid}`).set({
     callerId: currentUser.id,
     callerName: currentUser.username,
-    callerPeerId: peer.id,
+    callerPeerId: peer ? peer.id : null,
     timestamp: Date.now()
   });
 
-  // Совершаем WebRTC-вызов
-  const call = peer.call(targetPeerId, localStream);
-  handleStream(call);
+  if (targetPeerId) {
+    const call = peer.call(targetPeerId, localStream);
+    handleStream(call);
+  }
   remoteLabel.textContent = targetName;
 }
 
@@ -302,7 +323,6 @@ function listenToIncomingCalls() {
   });
 }
 
-// Принятие входящего вызова
 acceptCallBtn.onclick = () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
@@ -313,14 +333,12 @@ acceptCallBtn.onclick = () => {
   }
 };
 
-// Отклонение вызова
 rejectCallBtn.onclick = () => {
   stopRingtone();
   incomingModal.classList.add('hidden');
   db.ref(`calls/${currentUser.id}`).remove();
 };
 
-// === 10. ОБРАБОТКА ПОТОКОВ И ЗАВЕРШЕНИЕ ЗВОНКА ===
 function handleStream(call) {
   currentCall = call;
   callControls.classList.remove('hidden');
@@ -352,9 +370,7 @@ hangupBtn.onclick = () => {
   }
 };
 
-// Слушатели кнопок интерфейса
 authBtn.addEventListener('click', handleAuth);
 logoutBtn.addEventListener('click', logout);
 
-// Запуск инициализации
 initMedia();
