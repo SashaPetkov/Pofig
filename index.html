@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P Видеозвонки</title>
+  <title>P2P Видеочат</title>
   <style>
     :root {
       --bg: #121212;
@@ -77,7 +77,6 @@
       text-align: center;
     }
 
-    /* Список контактов */
     .user-list-header {
       display: flex;
       justify-content: space-between;
@@ -114,7 +113,6 @@
       font-size: 13px;
     }
 
-    /* Видео карточки */
     .video-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -147,7 +145,6 @@
       max-width: 800px;
     }
 
-    /* Модальное окно звонка */
     .incoming-modal {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -176,9 +173,10 @@
     .hidden { display: none !important; }
   </style>
 
-  <!-- Firebase SDK (v8) & PeerJS -->
+  <!-- Firebase SDKs (v8) & PeerJS -->
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -186,7 +184,7 @@
   <h1>P2P Видеочат</h1>
   <div id="status">Инициализация...</div>
 
-  <!-- 1. Экран авторизации / Регистрации -->
+  <!-- Экран авторизации -->
   <div class="card" id="auth-box">
     <h3 style="margin-top:0;">Вход / Регистрация</h3>
     <input type="text" id="username" placeholder="Имя пользователя (логин)">
@@ -194,7 +192,7 @@
     <button id="auth-btn">Войти / Зарегистрироваться</button>
   </div>
 
-  <!-- 2. Панель контактов и поиска -->
+  <!-- Панель контактов -->
   <div class="card hidden" id="contacts-box">
     <div class="user-list-header">
       <span id="current-user-label" style="font-weight: 600; color: #fff;"></span>
@@ -204,7 +202,7 @@
     <ul class="user-list" id="users-list"></ul>
   </div>
 
-  <!-- 3. Сетка видеозвонка -->
+  <!-- Сетка видео -->
   <div class="video-grid">
     <div class="video-card">
       <span>Вы</span>
@@ -220,7 +218,7 @@
     <button id="hangup-btn" class="danger">Завершить звонок</button>
   </div>
 
-  <!-- 4. Модальное окно входящего вызова -->
+  <!-- Модальное окно входящего звонка -->
   <div class="incoming-modal hidden" id="incoming-modal">
     <div class="modal-card">
       <h3>Входящий звонок</h3>
